@@ -14,6 +14,11 @@ from astroagent.analysis.statistics import inspect_image
 from astroagent.errors import AstroError, PipelineError
 from astroagent.io.images import image_format, load_image, save_image
 from astroagent.models.image import AstroImage
+from astroagent.pipeline.dataset_executor import (
+    DatasetPipelineResult,
+    execute_dataset_pipeline,
+    load_dataset,
+)
 from astroagent.pipeline.models import (
     PipelineDefinition,
     PipelineStep,
@@ -22,6 +27,7 @@ from astroagent.pipeline.models import (
 )
 from astroagent.pipeline.serialization import save_pipeline, save_report
 from astroagent.tools.base import ImageTool
+from astroagent.tools.dataset import DatasetTool
 from astroagent.tools.registry import ToolRegistry, default_registry
 
 logger = logging.getLogger(__name__)
@@ -49,7 +55,9 @@ class PipelineExecutor:
         """Accept custom tools or construct a fresh default registry."""
         self.registry = default_registry() if registry is None else registry
 
-    def validate(self, pipeline: PipelineDefinition) -> list[tuple[ImageTool[Any], Any]]:
+    def validate(
+        self, pipeline: PipelineDefinition
+    ) -> list[tuple[ImageTool[Any] | DatasetTool[Any], Any]]:
         """Resolve every step before modifying data; identify failures by step number."""
         resolved = []
         for index, step in enumerate(pipeline.steps, start=1):
@@ -64,6 +72,8 @@ class PipelineExecutor:
     def execute(self, image: AstroImage, pipeline: PipelineDefinition) -> PipelineResult:
         """Execute deterministic tools and record resolved parameters and diagnostics."""
         resolved = self.validate(pipeline)
+        if any(isinstance(tool, DatasetTool) for tool, _ in resolved):
+            raise PipelineError("Dataset tools require directory input, not a single AstroImage.")
         report = ProcessingReport(
             input=None if image.path is None else str(image.path),
             package_version=__version__,
@@ -83,6 +93,7 @@ class PipelineExecutor:
         )
         current = image
         for index, (tool, params) in enumerate(resolved, start=1):
+            assert isinstance(tool, ImageTool)
             logger.info("Step %d: %s", index, tool.name)
             started = perf_counter()
             try:
@@ -112,9 +123,17 @@ class PipelineExecutor:
         output_path: Path | str,
         *,
         overwrite: bool = False,
-    ) -> PipelineResult:
+    ) -> PipelineResult | DatasetPipelineResult:
         """Load an image, execute, and save it with resolved YAML and a JSON sidecar."""
-        self.validate(pipeline)
+        resolved = self.validate(pipeline)
+        if Path(input_path).is_dir():
+            return execute_dataset_pipeline(
+                load_dataset(Path(input_path), recursive=True),
+                pipeline,
+                resolved,
+                Path(output_path),
+                overwrite=overwrite,
+            )
         check_output_paths(Path(input_path), Path(output_path), overwrite=overwrite)
         result = self.execute(load_image(input_path), pipeline)
         save_result(result, output_path, overwrite=overwrite)

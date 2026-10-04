@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 
@@ -17,6 +17,8 @@ class ToolDescription(SchemaModel):
     name: str
     description: str
     parameters: dict[str, Any]
+    input_kind: Literal["image", "dataset"] = "image"
+    supports_nan: bool = False
 
 
 @dataclass
@@ -35,6 +37,7 @@ class ImageTool[Params: SchemaModel](ABC):
     name: str
     description: str
     params_model: type[Params]
+    supports_nan: bool = False
 
     def describe(self) -> ToolDescription:
         """Expose a function-calling-compatible schema without any provider SDK."""
@@ -42,16 +45,31 @@ class ImageTool[Params: SchemaModel](ABC):
             name=self.name,
             description=self.description,
             parameters=self.params_model.model_json_schema(),
+            supports_nan=self.supports_nan,
         )
 
     def execute(self, image: AstroImage, params: Params) -> ToolResult:
         """Validate inputs and return processing diagnostics without mutating input."""
         validated = self.params_model.model_validate(params)
-        if not np.isfinite(image.data).all():
+        if image.cfa is not None:
+            raise PipelineError("Raw CFA requires calibration and debayering before image editing.")
+        if (
+            np.isinf(image.data).any()
+            or not np.isfinite(image.data).any()
+            or (not self.supports_nan and np.isnan(image.data).any())
+        ):
             raise PipelineError("Processing requires finite pixels; repair or mask NaN/Inf first.")
         before = inspect_image(image)
         output, warnings = self.process(image, validated)
-        if not np.isfinite(output.data).all():
+        if (
+            np.isinf(output.data).any()
+            or not np.isfinite(output.data).any()
+            or (np.isnan(output.data).any() and not self.supports_nan)
+            or (
+                self.supports_nan
+                and not np.array_equal(np.isnan(image.data), np.isnan(output.data))
+            )
+        ):
             raise PipelineError(f"Tool '{self.name}' produced nonfinite pixel values.")
         output.header.add_history(f"astro-imaging-agent: {self.name}")
         output.metadata.update(header_metadata(output.header))

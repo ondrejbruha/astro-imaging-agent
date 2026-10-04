@@ -71,7 +71,7 @@ def test_providers_return_valid_plan_without_pixels(image, planner_class, provid
     parsed = json.loads(payload)
     assert parsed["request"] == "natural processing"
     assert "data" not in parsed["image_metrics"]
-    assert len(parsed["available_tools"]) == 4
+    assert {t["name"] for t in parsed["available_tools"]} >= {"normalize", "register_frames"}
     assert "api_key" not in payload
     if provider == "openai":
         assert kwargs["store"] is False

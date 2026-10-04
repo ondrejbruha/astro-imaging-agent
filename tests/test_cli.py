@@ -19,7 +19,11 @@ def test_help_version_and_tool_schemas():
     assert "astro-imaging-agent" in version.stdout
     tools = runner.invoke(app, ["tools"])
     assert tools.exit_code == 0, tools.output
-    assert len(json.loads(tools.stdout)) == 4
+    assert {d["name"] for d in json.loads(tools.stdout)} >= {
+        "register_frames",
+        "stack_frames",
+        "calibrate_frames",
+    }
 
 
 def test_inspect_human_json_and_analysis(fits_path):

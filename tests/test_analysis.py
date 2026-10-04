@@ -114,7 +114,7 @@ def test_no_stars_and_failed_detection_return_warnings(monkeypatch):
     def fail(*args, **kwargs):
         raise RuntimeError("detection failure")
 
-    monkeypatch.setattr("astroagent.analysis.stars.DAOStarFinder", fail)
+    monkeypatch.setattr("astroagent.registration.stars.DAOStarFinder", fail)
     metrics = analyze_stars(AstroImage(np.random.default_rng(4).normal(size=(32, 32))))
     assert metrics.star_count is None and "unavailable" in metrics.warnings[0]
 

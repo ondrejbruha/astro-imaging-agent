@@ -21,6 +21,7 @@ class BackgroundExtractTool(ImageTool[BackgroundExtractParams]):
     name = "background_extract"
     description = "Subtract sigma-clipped tiled polynomial sky estimates per channel."
     params_model = BackgroundExtractParams
+    supports_nan = True
 
     def process(
         self, image: AstroImage, params: BackgroundExtractParams

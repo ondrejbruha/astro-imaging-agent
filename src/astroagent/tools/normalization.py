@@ -26,14 +26,16 @@ class NormalizeTool(ImageTool[NormalizeParams]):
     name = "normalize"
     description = "Map the global pixel range into a bounded interval (default 0..1)."
     params_model = NormalizeParams
+    supports_nan = True
 
     def process(self, image: AstroImage, params: NormalizeParams) -> tuple[AstroImage, list[str]]:
         """Use float64 and map constant images to the lower bound with a warning."""
         data = np.asarray(image.data, dtype=np.float64)
-        low, high = float(data.min()), float(data.max())
+        low, high = float(np.nanmin(data)), float(np.nanmax(data))
         warnings = []
         if high == low:
             result = np.full(data.shape, params.lower)
+            result[np.isnan(data)] = np.nan
             warnings.append("Constant image mapped to the lower normalization bound.")
         else:
             result = params.lower + (data - low) / (high - low) * (params.upper - params.lower)

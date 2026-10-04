@@ -12,6 +12,7 @@ from astroagent.agent.planner import Planner, RuleBasedPlanner
 from astroagent.agent.prompts import SYSTEM_PROMPT, planning_payload
 from astroagent.analysis.statistics import ImageMetrics
 from astroagent.errors import PipelineError
+from astroagent.models.dataset import DatasetMetrics
 from astroagent.tools.base import ToolDescription
 
 logger = logging.getLogger(__name__)
@@ -55,12 +56,17 @@ class LLMPlanner(ABC):
         self.timeout = timeout
 
     def create_plan(
-        self, request: str, image_metrics: ImageMetrics, available_tools: list[ToolDescription]
+        self,
+        request: str,
+        image_metrics: ImageMetrics | DatasetMetrics,
+        available_tools: list[ToolDescription],
+        *,
+        feedback: dict[str, Any] | None = None,
     ) -> PlanResult:
         """Fetch one plan and reject malformed responses before any execution."""
         if not request.strip():
             raise PipelineError("Agent request must not be empty.")
-        payload = planning_payload(request, image_metrics, available_tools)
+        payload = planning_payload(request, image_metrics, available_tools, feedback)
         try:
             response = self.request_plan(payload)
         except PipelineError:
@@ -83,9 +89,23 @@ class LLMPlanner(ABC):
                 f"{self.provider} returned an invalid or incomplete plan."
             ) from None
         available = {tool.name for tool in available_tools}
-        if any(step.tool not in available for step in plan.pipeline.steps):
+        if any(
+            step.tool not in available
+            for pipeline in [plan.pipeline, *plan.alternatives]
+            for step in pipeline.steps
+        ):
             raise PipelineError(f"{self.provider} proposed a tool that was not advertised.")
         return plan
+
+    def revise_plan(
+        self,
+        request: str,
+        metrics: ImageMetrics | DatasetMetrics,
+        available_tools: list[ToolDescription],
+        feedback: dict[str, Any],
+    ) -> PlanResult:
+        """Plan the next bounded round using pixel-free execution measurements and history."""
+        return self.create_plan(request, metrics, available_tools, feedback=feedback)
 
     @abstractmethod
     def request_plan(self, payload: str) -> str | dict[str, Any]:

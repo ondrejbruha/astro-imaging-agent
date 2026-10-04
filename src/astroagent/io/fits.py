@@ -45,8 +45,12 @@ def load_fits(path: Path | str) -> AstroImage:
                         data = np.moveaxis(data, 0, -1)
                 elif data.ndim != 2:
                     raise ImageIOError("FITS file does not contain a supported 2D or RGB image.")
+                if "BAYERPAT" not in header and "BAYERPATN" in header:
+                    header["BAYERPAT"] = header["BAYERPATN"]
                 saturation = header.get("SATURATE")
                 level = None if saturation is None else float(saturation)
+                if level is None and data.dtype.kind in "ui":
+                    level = float(np.iinfo(data.dtype).max)
                 image = AstroImage(data, header_metadata(header), source, header, level)
                 if data.ndim == 3:
                     image.storage_channel_axis = channel_axis

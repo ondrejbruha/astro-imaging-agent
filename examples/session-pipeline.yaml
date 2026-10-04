@@ -1,0 +1,22 @@
+version: 1
+steps:
+  - tool: build_masters
+    params:
+      method: sigma-clipped
+  - tool: calibrate_frames
+    params:
+      dark_scaling: false
+      cosmetic_correction: false
+      debayer: true
+  - tool: register_frames
+    params:
+      reference: auto
+      interpolation: bicubic
+      random_seed: 0
+  - tool: stack_frames
+    params:
+      method: weighted-sigma-clipped
+      reject_worst_fraction: 0.1
+      sigma_low: 3.0
+      sigma_high: 3.0
+      normalize: true

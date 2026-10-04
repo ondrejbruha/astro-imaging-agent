@@ -1,5 +1,6 @@
 """Check distribution metadata, license payloads, and release tag consistency."""
 
+import argparse
 import os
 import subprocess
 import sys
@@ -15,7 +16,10 @@ from packaging.version import Version
 
 def main() -> None:
     """Fail before publication when an artifact is malformed or mislabeled."""
-    distributions = sorted(Path("dist").glob("*"))
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dist", type=Path, default=Path("dist"))
+    args = parser.parse_args()
+    distributions = sorted(args.dist.glob("*"))
     wheels = [path for path in distributions if path.suffix == ".whl"]
     sources = [path for path in distributions if path.name.endswith(".tar.gz")]
     if len(wheels) != 1 or len(sources) != 1:
@@ -31,7 +35,18 @@ def main() -> None:
             archive.read(next(name for name in names if name.endswith("entry_points.txt"))).decode()
         )
         assert entry_points["console_scripts"]["aia"] == "astroagent.cli.main:app"
+        assert "astro" not in entry_points["console_scripts"]
         assert "astroagent/py.typed" in names
+        for module in (
+            "calibration/engine",
+            "registration/engine",
+            "stacking/stack",
+            "pipeline/dataset_executor",
+            "agent/autonomous",
+            "tools/detail",
+            "tools/color",
+        ):
+            assert f"astroagent/{module}.py" in names
         assert any(name.endswith("/LICENSE") for name in names)
         assert any(name.endswith("/NOTICE") for name in names)
         assert not any(name.startswith("tests/") for name in names)

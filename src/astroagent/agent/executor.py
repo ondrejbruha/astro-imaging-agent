@@ -39,7 +39,11 @@ class AgentExecutor:
         """Load and analyze an image, then validate the proposed pipeline."""
         image = load_image(path)
         metrics = analyze_image(image)
-        plan = self.planner.create_plan(request, metrics, self.executor.registry.describe())
+        plan = self.planner.create_plan(
+            request,
+            metrics,
+            [tool for tool in self.executor.registry.describe() if tool.input_kind == "image"],
+        )
         self.executor.validate(plan.pipeline)
         return PreparedPlan(image, metrics, plan, request)
 

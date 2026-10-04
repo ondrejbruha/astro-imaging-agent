@@ -97,7 +97,7 @@ Versions come from Git tags through [poetry-dynamic-versioning](https://github.c
 version `0.1.0`; untagged checkouts get a development version. Source distributions
 freeze the derived version, so installation from PyPI does not need Git.
 
-`.github/workflows/release.yml` builds and tests a published release tag (or a manual
+`.github/workflows/release.yml` starts when a `v*` tag is pushed (or a manual
 run on a tag), verifies the artifact version matches the tag, checks both wheel and
 sdist, and publishes through PyPI Trusted Publishing. Before the first release:
 
@@ -105,7 +105,7 @@ sdist, and publishes through PyPI Trusted Publishing. Before the first release:
 2. Register a PyPI pending/trusted publisher for your repository, workflow
    **`release.yml`**, and environment **`pypi`**. Follow the
    [PyPI documentation](https://docs.pypi.org/trusted-publishers/adding-a-publisher/).
-3. Create and publish a GitHub release for the desired `vX.Y.Z` tag. The workflow
+3. Push the desired `vX.Y.Z` tag. Publishing a GitHub release is not required. The workflow
    also supports `workflow_dispatch` on an existing tag. No stored PyPI token is required.
 
 This repository preparation does not itself publish a package or create a release.

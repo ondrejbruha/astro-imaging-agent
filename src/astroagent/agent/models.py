@@ -9,3 +9,4 @@ class PlanResult(SchemaModel):
 
     pipeline: PipelineDefinition
     reasoning: list[str] = Field(default_factory=list)
+    alternatives: list[PipelineDefinition] = Field(default_factory=list, max_length=2)

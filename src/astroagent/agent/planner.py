@@ -1,10 +1,12 @@
-from typing import Protocol
+import unicodedata
+from typing import Any, Protocol
 
 from pydantic import JsonValue
 
 from astroagent.agent.models import PlanResult
 from astroagent.analysis.statistics import ImageMetrics
 from astroagent.errors import PipelineError
+from astroagent.models.dataset import DatasetMetrics
 from astroagent.pipeline.models import PipelineDefinition, PipelineStep
 from astroagent.tools.base import ToolDescription
 
@@ -13,7 +15,10 @@ class Planner(Protocol):
     """Provider-independent planning interface; pixels are never passed to planners."""
 
     def create_plan(
-        self, request: str, image_metrics: ImageMetrics, available_tools: list[ToolDescription]
+        self,
+        request: str,
+        image_metrics: ImageMetrics | DatasetMetrics,
+        available_tools: list[ToolDescription],
     ) -> PlanResult:
         """Return a declarative plan with concise explicit reasons."""
         ...
@@ -22,16 +27,29 @@ class Planner(Protocol):
 class RuleBasedPlanner:
     """Conservative numerical heuristics demonstrating orchestration without an API.
 
-    Free-text requests are recorded for provenance; this planner does not interpret
-    their meaning. Thresholds compare sky gradient/noise with the robust image range.
+    Thresholds compare sky gradient/noise with the robust image range. Limited
+    English/Czech keywords enable contrast, color and sharpening edits; arbitrary
+    free-form intent requires an existing optional LLM provider.
     """
 
     def create_plan(
-        self, request: str, image_metrics: ImageMetrics, available_tools: list[ToolDescription]
+        self,
+        request: str,
+        image_metrics: ImageMetrics | DatasetMetrics,
+        available_tools: list[ToolDescription],
     ) -> PlanResult:
         """Select background correction, mild denoising, and bounded stretching."""
         if not request.strip():
             raise PipelineError("Agent request must not be empty.")
+        if isinstance(image_metrics, DatasetMetrics):
+            from astroagent.agent.dataset_planner import DatasetRulePlanner
+
+            plan = DatasetRulePlanner().create_plan(request, image_metrics)
+            if any(
+                step.tool not in {t.name for t in available_tools} for step in plan.pipeline.steps
+            ):
+                raise PipelineError("Required dataset processing tools are unavailable.")
+            return plan
         available = {tool.name for tool in available_tools}
         steps: list[PipelineStep] = []
         reasoning: list[str] = []
@@ -86,4 +104,63 @@ class RuleBasedPlanner:
             )
         if not reasoning:
             reasoning.append("No heuristic threshold exceeded; preserve the current image.")
+        hints = unicodedata.normalize("NFKD", request).encode("ascii", "ignore").decode().lower()
+        display_ready = 0 <= image_metrics.min <= image_metrics.max <= 1 or any(
+            s.tool in {"stretch", "normalize"} for s in steps
+        )
+        if display_ready:
+            if "contrast" in hints or "kontrast" in hints:
+                add(
+                    "local_contrast",
+                    {"amount": 0.2, "radius": 12},
+                    "Requested local contrast; use a restrained luminance boost.",
+                )
+            if (
+                any(word in hints for word in ("color", "barv", "satur"))
+                and image_metrics.number_of_channels == 3
+            ):
+                add(
+                    "color_adjust",
+                    {"saturation": 1.1},
+                    "Requested colors; mildly increase RGB saturation.",
+                )
+            if "sharpen" in hints or "doostr" in hints:
+                add(
+                    "sharpen",
+                    {"amount": 0.3, "radius": 1, "threshold": 0.01},
+                    "Requested sharpening; threshold small noise fluctuations.",
+                )
         return PlanResult(pipeline=PipelineDefinition(steps=steps), reasoning=reasoning)
+
+    def revise_plan(
+        self,
+        request: str,
+        metrics: ImageMetrics | DatasetMetrics,
+        available_tools: list[ToolDescription],
+        feedback: dict[str, Any],
+    ) -> PlanResult:
+        """Reevaluate measurements, avoid repeated edits and preserve scientific masters."""
+        done = set(feedback.get("executed_tools", []))
+        hints = unicodedata.normalize("NFKD", request).encode("ascii", "ignore").decode().lower()
+        if "stack_frames" in done and not any(
+            h in hints
+            for h in (
+                "contrast",
+                "kontrast",
+                "barv",
+                "color",
+                "sharpen",
+                "doostr",
+                "stretch",
+                "display",
+            )
+        ):
+            return PlanResult(
+                pipeline=PipelineDefinition(),
+                reasoning=["Scientific master completed; preserve linear samples."],
+            )
+        plan = self.create_plan(request, metrics, available_tools)
+        plan.pipeline = PipelineDefinition(
+            steps=[step for step in plan.pipeline.steps if step.tool not in done]
+        )
+        return plan

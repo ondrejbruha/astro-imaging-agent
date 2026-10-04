@@ -22,16 +22,18 @@ class StretchTool(ImageTool[StretchParams]):
     name = "stretch"
     description = "Normalize then stretch globally using linear or asinh mapping; output is 0..1."
     params_model = StretchParams
+    supports_nan = True
 
     def process(self, image: AstroImage, params: StretchParams) -> tuple[AstroImage, list[str]]:
         """Map endpoints to 0/1; asinh gain is 10**(3*strength)-1."""
         data = np.asarray(image.data, dtype=np.float64)
-        black = float(data.min()) if params.black_point is None else params.black_point
-        white = float(data.max())
+        black = float(np.nanmin(data)) if params.black_point is None else params.black_point
+        white = float(np.nanmax(data))
         if black >= white:
             if params.black_point is not None:
                 raise ValueError("black_point must be smaller than the image maximum")
             scaled = np.zeros_like(data)
+            scaled[np.isnan(data)] = np.nan
             warnings = ["Constant image stretched to zero."]
         else:
             scaled = np.clip((data - black) / (white - black), 0, 1)

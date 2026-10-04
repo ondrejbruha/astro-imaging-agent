@@ -6,6 +6,8 @@ from typing import Any
 from astropy.io.fits import Header
 from numpy.typing import NDArray
 
+from astroagent.models.layout import CFAMetadata, ImageLayout
+
 
 @dataclass
 class AstroImage:
@@ -33,6 +35,29 @@ class AstroImage:
     def channels(self) -> int:
         """Return one for monochrome images and three for RGB images."""
         return 1 if self.data.ndim == 2 else 3
+
+    @property
+    def cfa(self) -> CFAMetadata | None:
+        """Parse explicit Bayer metadata, respecting completed debayering."""
+        if self.channels == 3 or self.header.get("DEBAYER", False):
+            return None
+        pattern = self.header.get("BAYERPAT", self.header.get("BAYERPATN"))
+        if pattern is None:
+            if str(self.header.get("COLORTYP", "")).casefold() in {"osc", "cfa", "bayer"}:
+                raise ValueError("CFA pattern is required; provide --pattern or --cfa-pattern.")
+            return None
+        return CFAMetadata(
+            pattern=str(pattern),
+            x_offset=int(self.header.get("XBAYROFF", 0)),
+            y_offset=int(self.header.get("YBAYROFF", 0)),
+        )
+
+    @property
+    def layout(self) -> ImageLayout:
+        """Distinguish RGB, raw CFA, and mono images at the processing boundary."""
+        if self.channels == 3:
+            return ImageLayout.RGB
+        return ImageLayout.CFA if self.cfa is not None else ImageLayout.MONO
 
     def with_data(self, data: NDArray[Any]) -> "AstroImage":
         """Return a new image with independent metadata and header copies."""
