@@ -26,7 +26,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: python -m pip install poetry==2.3.1
+      - name: Install Poetry and its versioning plugin
+        # Avoid project-local plugin installation across C: and D: on Windows runners.
+        run: python -m pip install poetry==2.3.1 "poetry-dynamic-versioning[plugin]==1.10.0"
       - run: poetry install --no-interaction --all-extras
       - run: poetry check --lock
       - run: poetry run ruff format --check .

@@ -18,6 +18,13 @@ The environment is local to `.venv/`; dependencies are frozen in `poetry.lock`.
 Use `poetry run aia` inside this environment; installed-package users invoke `aia`
 directly. No API keys are needed for tests, including provider contract tests.
 
+CI and release workflows install Poetry 2.3.1 and
+`poetry-dynamic-versioning[plugin]==1.10.0` together before `poetry install`.
+Having the plugin in Poetry's own environment avoids the
+[project-plugin installation failure across Windows drives](https://github.com/python-poetry/poetry/issues/10028)
+when Python is on `C:` and the GitHub Actions checkout is on `D:`. The declared
+plugin requirement and Git-tag versioning remain in `pyproject.toml`.
+
 Install Poetry in a dedicated environment (for example with pipx) so its plugin
 resolver does not inherit unrelated application dependencies. On the machine used
 to prepare this project, the global Poetry environment had conflicting LangChain
