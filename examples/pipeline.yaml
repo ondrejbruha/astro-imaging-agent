@@ -1,0 +1,15 @@
+version: 1
+steps:
+  - tool: background_extract
+    params:
+      grid_size: 8
+      polynomial_degree: 2
+      sigma_clipping_threshold: 3.0
+  - tool: denoise
+    params:
+      method: gaussian
+      sigma: 0.8
+  - tool: stretch
+    params:
+      method: asinh
+      strength: 0.6
