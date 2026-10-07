@@ -1,6 +1,6 @@
 # astro-imaging-agent
 
-![Polaris Flare](polarisflare.jpg)
+![North America & Pelican Nebulae](amerika.jpg)
 
 **Made by Alpha Codes s.r.o.** Author and maintainer: **Ondřej Brůha**
 ([ondrej.bruha@alphacodes.eu](mailto:ondrej.bruha@alphacodes.eu)).
