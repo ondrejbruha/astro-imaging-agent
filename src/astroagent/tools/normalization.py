@@ -7,10 +7,10 @@ from astroagent.tools.base import ImageTool
 
 
 class NormalizeParams(SchemaModel):
-    """Target interval for a global min/max mapping shared across RGB channels."""
+    """Finite nonnegative target interval; output remains float64, shared across RGB."""
 
-    lower: float = Field(default=0.0, ge=0, le=1)
-    upper: float = Field(default=1.0, ge=0, le=1)
+    lower: float = Field(default=0.0, ge=0)
+    upper: float = Field(default=1.0, ge=0)
 
     @model_validator(mode="after")
     def ordered_range(self) -> "NormalizeParams":

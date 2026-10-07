@@ -150,7 +150,7 @@ def normalize_command(
     upper: float = typer.Option(1.0),
     overwrite: bool = typer.Option(False, help="Replace existing output artifacts."),
 ) -> None:
-    """Normalize globally into 0..1 (or a specified subinterval)."""
+    """Normalize globally into a nonnegative interval (default 0..1)."""
     _process(image, output, "normalize", {"lower": lower, "upper": upper}, overwrite)
 
 

@@ -10,6 +10,7 @@ from astroagent.errors import ImageIOError
 from astroagent.io import load_fits, load_image, save_fits, save_image
 from astroagent.io.images import image_format
 from astroagent.models.image import AstroImage
+from astroagent.tools.normalization import NormalizeParams, NormalizeTool
 
 
 @pytest.mark.parametrize("extension", ["fit", "fits", "fts", "fits.gz"])
@@ -150,6 +151,25 @@ def test_bounded_float_exports(tmp_path, extension):
     maximum = np.iinfo(loaded.data.dtype).max
     tolerance = 0.03 if extension == "jpg" else 1 / maximum
     np.testing.assert_allclose(loaded.data / maximum, data, atol=tolerance)
+
+
+@pytest.mark.parametrize("rgb", [False, True])
+def test_normalize_to_jpeg_scales_full_display_range(tmp_path, rgb):
+    data = np.tile(np.linspace(100, 1100, 32), (16, 1))
+    if rgb:
+        data = np.repeat(data[..., None], 3, axis=-1)
+    normalized = NormalizeTool().execute(AstroImage(data), NormalizeParams()).image
+    decoded = load_image(save_image(normalized, tmp_path / "preview.jpg"))
+    np.testing.assert_allclose(decoded.data, (data - 100) / 1000 * 255, atol=2)
+
+
+@pytest.mark.parametrize("extension", ["fit", "tiff"])
+def test_extended_normalization_scientific_roundtrip(tmp_path, extension):
+    source = AstroImage(np.array([[100.0, 150.0, 200.0]]))
+    normalized = NormalizeTool().execute(source, NormalizeParams(upper=255)).image
+    decoded = load_image(save_image(normalized, tmp_path / f"out.{extension}"))
+    np.testing.assert_allclose(decoded.data, [[0, 127.5, 255]])
+    assert decoded.header["SATURATE"] == 255
 
 
 @pytest.mark.parametrize(

@@ -189,7 +189,13 @@ PyTorch, SEP, astroalign, ccdproc) can live behind new tools/adapters.
   Failed detection or unreliable shapes return `null` and warnings. This is a rough
   quality indicator, not precision PSF fitting or calibrated photometry.
 - Normalize uses one global min/max scale across RGB; constant images map to the
-  lower endpoint. The target interval must satisfy `0 <= lower < upper <= 1`.
+  lower endpoint. Finite target bounds must satisfy `0 <= lower < upper`; output
+  remains float64, including for `--upper 255` or `--upper 65535`. FITS/TIFF preserve
+  these values. For PNG/JPEG/WebP/BMP keep the default 0..1 range: export scales it
+  to the format's integer range automatically. Changing 0..1 to 0..255 does not
+  brighten a correctly scaled preview. Linear min/max mapping can leave faint
+  signals dark when bright stars dominate; try `aia stretch image.fit preview.jpg
+  --method asinh --strength 0.6`. Extreme input spans can overflow float64 arithmetic.
 - Stretch also uses global endpoints. `black_point` is in input units and must be
   below the maximum. `linear` ignores strength; `asinh` uses
   `gain = 10**(3*strength)-1` and `asinh(gain*x)/asinh(gain)`, with strength zero

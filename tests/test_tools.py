@@ -21,6 +21,27 @@ def test_normalize_and_rgb_shared_scale(image):
     np.testing.assert_allclose(output.data, 0.1 + rgb.data / 200 * 0.8)
 
 
+@pytest.mark.parametrize("lower,upper", [(0, 255), (100, 65535)])
+def test_normalize_extended_range_preserves_rgb_metadata_and_nan(image, lower, upper):
+    data = np.array([[[0, 25, 50], [100, np.nan, 75]]], dtype=float)
+    source = image.with_data(data)
+    result = NormalizeTool().execute(source, NormalizeParams(lower=lower, upper=upper)).image
+    np.testing.assert_allclose(result.data, lower + data / 100 * (upper - lower))
+    assert result.data.dtype == np.float64
+    assert result.saturation_level == upper
+    assert result.header["SATURATE"] == upper
+    assert result.header["OBJECT"] == source.header["OBJECT"]
+    np.testing.assert_array_equal(source.data, data)
+
+
+def test_constant_normalize_extended_range():
+    result = NormalizeTool().execute(
+        AstroImage(np.array([[42.0, np.nan, 42.0]])), NormalizeParams(lower=100, upper=255)
+    )
+    np.testing.assert_array_equal(result.image.data, [[100, np.nan, 100]])
+    assert result.warnings
+
+
 @pytest.mark.parametrize(
     "tool,params",
     [
@@ -126,6 +147,9 @@ def test_background_rgb_independent_planes():
         (StretchParams, {"method": "unknown"}),
         (NormalizeParams, {"lower": 1, "upper": 0}),
         (NormalizeParams, {"lower": -1}),
+        (NormalizeParams, {"upper": float("inf")}),
+        (NormalizeParams, {"lower": float("nan")}),
+        (NormalizeParams, {"lower": 255, "upper": 255}),
         (DenoiseParams, {"sigma": 0}),
         (DenoiseParams, {"method": "wavelet"}),
         (BackgroundExtractParams, {"grid_size": 1}),
