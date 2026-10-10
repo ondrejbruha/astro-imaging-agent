@@ -6,6 +6,7 @@ from scipy.stats import rankdata
 
 from astroagent.analysis.background import analyze_background
 from astroagent.analysis.statistics import inspect_image
+from astroagent.execution import ExecutionContext, execution_scope
 from astroagent.models.base import SchemaModel
 from astroagent.models.image import AstroImage
 from astroagent.registration.stars import DetectionParams, StarCatalog, detect_stars
@@ -17,6 +18,7 @@ class FrameQualityMetrics(SchemaModel):
     path: str
     star_count: int = Field(ge=0)
     median_fwhm: float | None = Field(default=None, gt=0)
+    median_hfr: float | None = Field(default=None, gt=0)
     median_eccentricity: float | None = Field(default=None, ge=0, le=1)
     background_median: float
     background_sigma: float = Field(ge=0)
@@ -26,23 +28,27 @@ class FrameQualityMetrics(SchemaModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+@execution_scope
 def measure_frame(
     image: AstroImage,
     *,
     path: Path | str | None = None,
     detection: DetectionParams | None = None,
+    context: ExecutionContext | None = None,
 ) -> tuple[FrameQualityMetrics, StarCatalog]:
     """Measure sky, approximate PSFs and peak/noise SNR without modifying pixels."""
     catalog = detect_stars(image, detection)
     background = analyze_background(image)
     stats = inspect_image(image)
     widths = [s.fwhm for s in catalog.stars if s.fwhm is not None]
+    radii = [s.hfr for s in catalog.stars if s.hfr is not None]
     shapes = [s.eccentricity for s in catalog.stars if s.eccentricity is not None]
     peaks = [s.peak for s in catalog.stars if s.peak is not None]
     return FrameQualityMetrics(
         path=str(path or image.path or "<memory>"),
         star_count=len(catalog.stars),
         median_fwhm=float(np.median(widths)) if widths else None,
+        median_hfr=float(np.median(radii)) if radii else None,
         median_eccentricity=float(np.median(shapes)) if shapes else None,
         background_median=background.median,
         background_sigma=background.sigma,

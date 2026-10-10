@@ -75,6 +75,7 @@ class ColorAdjustTool(ImageTool[ColorAdjustParams]):
     )
     params_model = ColorAdjustParams
     supports_nan = True
+    compatible_layouts = ["rgb"]
 
     def process(self, image: AstroImage, params: ColorAdjustParams) -> tuple[AstroImage, list[str]]:
         """Use a cosine hue-band mask; achromatic samples remain unselected for selective edits."""

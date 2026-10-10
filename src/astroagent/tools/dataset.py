@@ -52,6 +52,21 @@ class DatasetTool[Params: SchemaModel](ABC):
             description=self.description,
             parameters=self.params_model.model_json_schema(),
             input_kind="dataset",
+            output_kind=self.output_kind,
+            compatible_layouts=(
+                ["mono", "cfa", "rgb"]
+                if self.name.startswith("build_master") or self.name == "calibrate_frames"
+                else ["cfa"]
+                if self.name == "debayer_frames"
+                else ["mono", "rgb"]
+            ),
+            supports_nan=self.name
+            in {"register_frames", "stack_frames", "debayer_frames", "calibrate_frames"},
+            ui_hints={
+                name: {"widget": "directory" if name == "session" else "file"}
+                for name in self.params_model.model_fields
+                if name in {"session", "bias", "dark", "master_bias", "master_dark", "master_flat"}
+            },
         )
 
     @abstractmethod
@@ -142,7 +157,9 @@ class BuildMastersTool(DatasetTool[BuildMastersParams]):
             dataset = AstroDataset(
                 discover_fits(params.session, recursive=True), source=Path(params.session)
             )
-        session = inspect_session_frames(dataset.frames, cfa_pattern=params.cfa_pattern)
+        session = inspect_session_frames(
+            dataset.frames, cfa_pattern=params.cfa_pattern, purposes=dataset.purpose_overrides
+        )
         combine = CombineParams.model_validate(
             params.model_dump(exclude={"session", "cfa_pattern"})
         )
@@ -183,7 +200,15 @@ class BuildSingleMasterTool(DatasetTool[BuildSingleMasterParams]):
         self, dataset: AstroDataset, params: BuildSingleMasterParams, context: DatasetContext
     ) -> DatasetToolResult:
         """Build a purpose-specific master and retain its provenance in dataset state."""
-        frames = [inspect_frame(p) for p in dataset.frames]
+        frames = [
+            inspect_frame(
+                p,
+                frame_type=FrameType(dataset.purpose_overrides[str(p)])
+                if str(p) in dataset.purpose_overrides
+                else None,
+            )
+            for p in dataset.frames
+        ]
         frames = [f for f in frames if f.frame_type == self.kind]
         context.output.mkdir(parents=True, exist_ok=True)
         master = build_master(

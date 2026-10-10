@@ -37,7 +37,7 @@ def image_format(path: Path | str) -> str:
     )
 
 
-def load_image(path: Path | str) -> AstroImage:
+def load_image(path: Path | str, *, hdu: int | None = None) -> AstroImage:
     """Load FITS, precision-preserving TIFF/PNG, or standard 8-bit raster images.
 
     Multi-page TIFF, animations, alpha channels, and ambiguous non-RGB cubes are
@@ -46,7 +46,9 @@ def load_image(path: Path | str) -> AstroImage:
     source = Path(path)
     format_name = image_format(source)
     if format_name == "fits":
-        return load_fits(source)
+        return load_fits(source, hdu=hdu)
+    if hdu is not None:
+        raise ImageIOError("HDU selection is available only for FITS inputs.")
     try:
         metadata: dict[str, Any] = {"format": format_name}
         header = Header()

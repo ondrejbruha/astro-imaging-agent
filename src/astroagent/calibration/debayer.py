@@ -2,12 +2,16 @@ import numpy as np
 from scipy.ndimage import convolve
 
 from astroagent.errors import PipelineError
+from astroagent.execution import ExecutionContext, checkpoint, emit_progress, execution_scope
 from astroagent.io.metadata import header_metadata
 from astroagent.models.image import AstroImage
 from astroagent.models.layout import CFAMetadata
 
 
-def debayer_image(image: AstroImage, cfa: CFAMetadata | None = None) -> AstroImage:
+@execution_scope
+def debayer_image(
+    image: AstroImage, cfa: CFAMetadata | None = None, *, context: ExecutionContext | None = None
+) -> AstroImage:
     """Bilinearly reconstruct RGB from original CFA samples, respecting phase offsets.
 
     Interpolation uses finite-sample normalized kernels at edges and holes.
@@ -29,7 +33,9 @@ def debayer_image(image: AstroImage, cfa: CFAMetadata | None = None) -> AstroIma
     data = np.asarray(image.data, dtype=np.float32)
     valid = np.isfinite(data)
     output = np.empty((*data.shape, 3), dtype=np.float32)
+    emit_progress("debayer-channels", 0, 3, "channel")
     for c, color in enumerate("RGB"):
+        checkpoint()
         kernel = np.array([[1, 2, 1], [2, 4, 2], [1, 2, 1]], dtype=np.float32)
         if color == "G":
             kernel = np.array([[0, 1, 0], [1, 4, 1], [0, 1, 0]], dtype=np.float32)
@@ -40,6 +46,7 @@ def debayer_image(image: AstroImage, cfa: CFAMetadata | None = None) -> AstroIma
             numerator, denominator, out=np.full_like(data, np.nan), where=denominator > 0
         )
         output[..., c][~valid] = np.nan
+        emit_progress("debayer-channels", c + 1, 3, "channel")
     result = image.with_data(output)
     result.header["DEBAYER"] = True
     result.header["CFASRC"] = cfa.pattern

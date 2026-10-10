@@ -37,4 +37,5 @@ jobs:
       - run: poetry run pytest --cov=astroagent --cov-report=term-missing
       - run: poetry build
       - run: poetry run python scripts/check_dist.py
-      - run: poetry run python scripts/smoke_dist.py
+      - name: Installed wheel CLI and worker processing, interruption, and restart smoke
+        run: poetry run python scripts/smoke_dist.py

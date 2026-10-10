@@ -5,6 +5,7 @@ from numpy.typing import NDArray
 from pydantic import Field, field_validator
 
 from astroagent.errors import PipelineError
+from astroagent.execution import checkpoint
 from astroagent.models.base import SchemaModel
 
 TransformModel = Literal["similarity", "affine"]
@@ -82,6 +83,7 @@ def ransac_transform(
     best = np.zeros(len(source), dtype=bool)
     best_error = np.inf
     for _ in range(trials):
+        checkpoint()
         indices = rng.choice(len(source), 3, replace=False)
         try:
             matrix = fit_transform(source[indices], target[indices], model)
@@ -97,6 +99,7 @@ def ransac_transform(
     if best.sum() < 3:
         raise PipelineError("RANSAC found fewer than three consistent matching stars.")
     for _ in range(10):
+        checkpoint()
         matrix = fit_transform(source[best], target[best], model)
         residual = np.linalg.norm(apply_transform(source, matrix) - target, axis=1)
         keep = residual <= threshold

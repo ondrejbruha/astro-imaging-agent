@@ -45,7 +45,15 @@ class ToolRegistry:
 
     def describe(self) -> list[ToolDescription]:
         """List tool descriptions and schemas in stable registration order."""
-        return [tool.describe() for tool in self._tools.values()]
+        descriptions = []
+        for tool in self._tools.values():
+            description = tool.describe()
+            if isinstance(tool, ImageTool) and type(tool).__module__.startswith(
+                "astroagent.tools."
+            ):
+                description.preview_strategies = ["full-resolution-then-crop-resize"]
+            descriptions.append(description)
+        return descriptions
 
 
 def default_registry() -> ToolRegistry:

@@ -4,8 +4,10 @@ from pydantic import JsonValue
 
 from astroagent.agent.models import PlanResult
 from astroagent.calibration.models import FrameType
-from astroagent.calibration.session import discover_session, validate_session
+from astroagent.calibration.session import inspect_session_frames, validate_session
 from astroagent.errors import PipelineError
+from astroagent.execution import ExecutionContext, emit_progress, execution_scope
+from astroagent.io.datasets import discover_fits
 from astroagent.models.dataset import AstroDataset, DatasetMetrics
 from astroagent.pipeline.models import PipelineDefinition, PipelineStep
 from astroagent.registration.engine import analyze_frames
@@ -15,7 +17,18 @@ from astroagent.stacking.workflow import restore_registration
 
 def inspect_dataset(source: Path) -> DatasetMetrics:
     """Expose session metadata and prepared-frame quality to a planner without image arrays."""
-    session = discover_session(source)
+    return inspect_selected_dataset(
+        AstroDataset(discover_fits(source, recursive=True), source=source)
+    )
+
+
+@execution_scope
+def inspect_selected_dataset(
+    dataset: AstroDataset, *, context: ExecutionContext | None = None
+) -> DatasetMetrics:
+    """Prepare an explicit selected dataset without rediscovering its parent directories."""
+    emit_progress("analyzing")
+    session = inspect_session_frames(dataset.frames, purposes=dataset.purpose_overrides)
     lights = session.of_type(FrameType.LIGHT)
     has_calibration = any(
         session.of_type(k) for k in (FrameType.BIAS, FrameType.DARK, FrameType.FLAT)
@@ -25,12 +38,20 @@ def inspect_dataset(source: Path) -> DatasetMetrics:
     reference = None
     registration_statistics = {}
     if not has_calibration and not any(f.cfa for f in session.frames):
-        dataset = AstroDataset([f.path for f in (lights or session.frames)], source=source)
+        dataset = AstroDataset(
+            [f.path for f in (lights or session.frames)],
+            source=dataset.source,
+            reference=dataset.reference,
+        )
         restore_registration(dataset)
         if not dataset.qualities:
             analyze_frames(dataset)
         frames = [q.model_dump(mode="json") for q in dataset.qualities]
-        reference = select_reference(dataset.qualities).path
+        reference = (
+            str(dataset.reference)
+            if dataset.reference is not None
+            else select_reference(dataset.qualities).path
+        )
         if dataset.registrations:
             registration_statistics = {
                 "frames": [r.model_dump(mode="json") for r in dataset.registrations],

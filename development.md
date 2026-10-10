@@ -88,6 +88,10 @@ poetry run twine check dist/*
 
 CI runs these checks on Python 3.12, 3.13 and 3.14 on Linux and Python 3.13 on Windows,
 then verifies a built wheel can be installed and its CLI invoked outside the checkout.
+The same smoke also starts the installed worker, executes actual processing, interrupts
+an accepted job, and verifies a restarted worker has no old session state. See
+[worker-protocol.md](docs/worker-protocol.md) for the contract and
+[release-handoff.md](docs/release-handoff.md) for bundled-Python verification.
 Tests use small synthetic arrays, including realistic Gaussian stars and polynomial
 sky gradients; no external datasets are fetched.
 
@@ -111,3 +115,5 @@ sdist, and publishes through PyPI Trusted Publishing. Before the first release:
 This repository preparation does not itself publish a package or create a release.
 Project instructions in `AGENTS.md` prohibit commits/pushes during agent work and
 require tests and staged, reviewable changes.
+Task-specific aiaGUI assignments require read-only Git operations and take precedence
+over staging; their changes stay in the working tree for review.

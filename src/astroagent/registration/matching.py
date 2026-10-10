@@ -6,6 +6,7 @@ from numpy.typing import NDArray
 from scipy.spatial import cKDTree
 
 from astroagent.errors import PipelineError
+from astroagent.execution import checkpoint
 from astroagent.registration.stars import StarCatalog
 from astroagent.registration.transform import apply_transform, fit_transform
 
@@ -23,6 +24,7 @@ def _triangles(points: NDArray[np.float64]) -> tuple[NDArray[np.float64], NDArra
     tree = cKDTree(points)
     triangles: set[tuple[int, ...]] = set()
     for i, point in enumerate(points):
+        checkpoint()
         indices = tree.query(point, k=min(7, len(points)))[1]
         for j, k in combinations(indices[1:], 2):
             triangles.add(tuple(sorted((i, int(j), int(k)))))

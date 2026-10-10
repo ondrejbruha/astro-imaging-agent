@@ -45,6 +45,11 @@ def main() -> None:
             "agent/autonomous",
             "tools/detail",
             "tools/color",
+            "worker/__main__",
+            "worker/server",
+            "execution",
+            "preview",
+            "analysis/hfr",
         ):
             assert f"astroagent/{module}.py" in names
         assert any(name.endswith("/LICENSE") for name in names)

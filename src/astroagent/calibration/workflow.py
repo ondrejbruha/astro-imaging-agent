@@ -11,6 +11,7 @@ from astroagent.calibration.masters import build_masters, choose_master
 from astroagent.calibration.models import AstroSession, CalibrationPlan, FrameType, MasterFrame
 from astroagent.calibration.session import inspect_frame, inspect_session_frames, validate_session
 from astroagent.errors import AstroError, PipelineError
+from astroagent.execution import ExecutionContext, checkpoint, emit_progress, execution_scope
 from astroagent.io.datasets import frame_name, prepare_directory, write_json
 from astroagent.io.fits import load_fits, save_fits
 from astroagent.models.dataset import AstroDataset
@@ -47,6 +48,7 @@ def plan_calibration(session: AstroSession, plan: CalibrationPlan) -> dict[str, 
     }
 
 
+@execution_scope
 def calibrate_frames(
     dataset: AstroDataset,
     output: Path,
@@ -56,11 +58,14 @@ def calibrate_frames(
     overwrite: bool = False,
     combine: CombineParams | None = None,
     progress: Callable[[], None] | None = None,
+    context: ExecutionContext | None = None,
 ) -> AstroDataset:
     """Discover/build missing masters, select compatible corrections and calibrate each light."""
     plan = CalibrationPlan() if plan is None else plan
     started = perf_counter()
-    session = inspect_session_frames(dataset.frames, cfa_pattern=plan.cfa_pattern)
+    session = inspect_session_frames(
+        dataset.frames, cfa_pattern=plan.cfa_pattern, purposes=dataset.purpose_overrides
+    )
     warnings = validate_session(session)
     prepare_directory(output, dataset.frames, overwrite=overwrite)
     masters = list(dataset.masters)
@@ -103,7 +108,9 @@ def calibrate_frames(
     cached_master = lru_cache(maxsize=3)(load_fits)
     reports = []
     lights = session.of_type(FrameType.LIGHT)
+    emit_progress("calibrating", 0, len(lights), "frame")
     for index, info in enumerate(lights, 1):
+        checkpoint()
         tick = perf_counter()
         record: dict[str, Any] = {"path": str(info.path), "output": None, "warnings": []}
         try:
@@ -147,6 +154,8 @@ def calibrate_frames(
             )
             save_fits(image, target, overwrite=overwrite)
             result.frames.append(target)
+            if info.path == dataset.reference:
+                result.reference = target
             record.update(
                 {
                     "output": str(target),
@@ -166,6 +175,7 @@ def calibrate_frames(
             logger.warning("Excluded light %s: %s", info.path, exc)
         record["duration_ms"] = (perf_counter() - tick) * 1000
         reports.append(record)
+        emit_progress("calibrating", index, len(lights), "frame")
         if progress is not None:
             progress()
     report = {
@@ -187,11 +197,13 @@ def calibrate_frames(
     return result
 
 
+@execution_scope
 def debayer_frames(
     dataset: AstroDataset,
     output: Path,
     *,
     pattern: str | None = None,
+    context: ExecutionContext | None = None,
     overwrite: bool = False,
 ) -> AstroDataset:
     """Demosaic an existing CFA dataset without calibration or hidden pattern guessing."""
@@ -199,7 +211,9 @@ def debayer_frames(
     result = AstroDataset(
         [], source=dataset.source, masters=dataset.masters, reports=dict(dataset.reports)
     )
+    emit_progress("debayering", 0, len(dataset.frames), "frame")
     for index, path in enumerate(dataset.frames, 1):
+        checkpoint()
         image = load_fits(path)
         cfa = (
             CFAMetadata(
@@ -214,6 +228,9 @@ def debayer_frames(
         target = output / frame_name(path, index, suffix="_rgb")
         save_fits(image, target, overwrite=overwrite)
         result.frames.append(target)
+        if path == dataset.reference:
+            result.reference = target
+        emit_progress("debayering", index, len(dataset.frames), "frame")
     write_json(
         output / "debayer.json",
         {

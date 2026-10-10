@@ -51,6 +51,7 @@ include = [
     {path = "development.md", format = "sdist"},
     {path = "AGENTS.md", format = "sdist"},
     {path = "scripts", format = "sdist"},
+    {path = "docs", format = "sdist"},
 ]
 version = "0.0.0"
 

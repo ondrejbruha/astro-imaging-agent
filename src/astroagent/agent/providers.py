@@ -11,7 +11,7 @@ from astroagent.agent.models import PlanResult
 from astroagent.agent.planner import Planner, RuleBasedPlanner
 from astroagent.agent.prompts import SYSTEM_PROMPT, planning_payload
 from astroagent.analysis.statistics import ImageMetrics
-from astroagent.errors import PipelineError
+from astroagent.errors import PipelineError, ProviderError
 from astroagent.models.dataset import DatasetMetrics
 from astroagent.tools.base import ToolDescription
 
@@ -29,7 +29,7 @@ def _sdk_client(
             f"Install provider support: pip install 'astro-imaging-agent[{provider}]' "
             f"(developers: poetry install -E {provider})."
         ) from None
-    key = os.environ.get(key_name)
+    key = kwargs.pop("api_key", None) or os.environ.get(key_name)
     if not key:
         raise PipelineError(f"Set the {key_name} environment variable to use {provider}.")
     return getattr(module, constructor)(api_key=key, **kwargs)
@@ -45,7 +45,9 @@ class LLMPlanner(ABC):
 
     provider: str
 
-    def __init__(self, model: str, *, client: Any = None, timeout: float = 60.0) -> None:
+    def __init__(
+        self, model: str, *, client: Any = None, timeout: float = 60.0, api_key: str | None = None
+    ) -> None:
         """Require an explicit model and allow fake SDK clients for offline tests."""
         if not model.strip():
             raise PipelineError("LLM model must not be empty.")
@@ -54,6 +56,7 @@ class LLMPlanner(ABC):
         self.model = model
         self.client = client
         self.timeout = timeout
+        self.api_key = api_key
 
     def create_plan(
         self,
@@ -69,11 +72,11 @@ class LLMPlanner(ABC):
         payload = planning_payload(request, image_metrics, available_tools, feedback)
         try:
             response = self.request_plan(payload)
-        except PipelineError:
-            raise
+        except PipelineError as exc:
+            raise ProviderError(str(exc)) from exc
         except Exception as exc:
             logger.debug("%s SDK failed with %s", self.provider, type(exc).__name__)
-            raise PipelineError(
+            raise ProviderError(
                 f"{self.provider} planning request failed ({type(exc).__name__}); "
                 "check credentials, model access, limits, and connection."
             ) from None
@@ -85,7 +88,7 @@ class LLMPlanner(ABC):
             )
         except (ValidationError, ValueError) as exc:
             logger.debug("Invalid %s plan: %s", self.provider, type(exc).__name__)
-            raise PipelineError(
+            raise ProviderError(
                 f"{self.provider} returned an invalid or incomplete plan."
             ) from None
         available = {tool.name for tool in available_tools}
@@ -94,7 +97,7 @@ class LLMPlanner(ABC):
             for pipeline in [plan.pipeline, *plan.alternatives]
             for step in pipeline.steps
         ):
-            raise PipelineError(f"{self.provider} proposed a tool that was not advertised.")
+            raise ProviderError(f"{self.provider} proposed a tool that was not advertised.")
         return plan
 
     def revise_plan(
@@ -121,7 +124,13 @@ class OpenAIPlanner(LLMPlanner):
         """Use a non-stored Responses request and reject incomplete/refused responses."""
         if self.client is None:
             self.client = _sdk_client(
-                "openai", "OpenAI", "openai", "OPENAI_API_KEY", timeout=self.timeout, max_retries=0
+                "openai",
+                "OpenAI",
+                "openai",
+                "OPENAI_API_KEY",
+                timeout=self.timeout,
+                max_retries=0,
+                api_key=self.api_key,
             )
         response = self.client.responses.create(
             model=self.model,
@@ -151,6 +160,7 @@ class AnthropicPlanner(LLMPlanner):
                 "ANTHROPIC_API_KEY",
                 timeout=self.timeout,
                 max_retries=0,
+                api_key=self.api_key,
             )
         response = self.client.messages.create(
             model=self.model,
@@ -197,6 +207,7 @@ class GeminiPlanner(LLMPlanner):
                 "Client",
                 "gemini",
                 "GEMINI_API_KEY",
+                api_key=self.api_key,
                 http_options={
                     "timeout": int(self.timeout * 1000),
                     "retry_options": {"attempts": 1},
@@ -218,7 +229,11 @@ class GeminiPlanner(LLMPlanner):
 
 
 def create_planner(
-    provider: ProviderName = "rules", model: str | None = None, *, timeout: float = 60.0
+    provider: ProviderName = "rules",
+    model: str | None = None,
+    *,
+    timeout: float = 60.0,
+    api_key: str | None = None,
 ) -> Planner:
     """Select a planner without importing optional SDKs until the first request."""
     if provider == "rules":
@@ -232,4 +247,4 @@ def create_planner(
         "anthropic": AnthropicPlanner,
         "gemini": GeminiPlanner,
     }
-    return providers[provider](model, timeout=timeout)
+    return providers[provider](model, timeout=timeout, api_key=api_key)

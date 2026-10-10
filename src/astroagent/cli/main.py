@@ -106,9 +106,10 @@ def inspect_command(
         ..., help="Input mono or RGB image (FITS, TIFF, PNG, JPEG, WebP, BMP)."
     ),
     as_json: bool = typer.Option(False, "--json", help="Emit JSON suitable for scripts."),
+    hdu: int | None = typer.Option(None, min=0, help="Zero-based FITS image HDU."),
 ) -> None:
     """Inspect dimensions, finite statistics, saturation, and FITS metadata."""
-    metrics = inspect_image(load_image(image))
+    metrics = inspect_image(load_image(image, hdu=hdu))
     if as_json:
         typer.echo(metrics.model_dump_json(indent=2))
         return
@@ -288,10 +289,11 @@ def run_command(
     input_path: Path = typer.Option(..., "--input", help="Input image."),
     output: Path = typer.Option(..., "--output", help="Output image; extension selects format."),
     overwrite: bool = typer.Option(False, help="Replace existing output artifacts."),
+    hdu: int | None = typer.Option(None, min=0, help="Zero-based FITS image HDU."),
 ) -> None:
     """Execute a saved YAML pipeline without any planner or LLM."""
     result = PipelineExecutor().run(
-        load_pipeline(pipeline), input_path, output, overwrite=overwrite
+        load_pipeline(pipeline), input_path, output, overwrite=overwrite, hdu=hdu
     )
     typer.echo(f"Saved {output}")
     warnings = (

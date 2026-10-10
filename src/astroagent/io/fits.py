@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from typing import Any
 
 import numpy as np
 from astropy.io import fits
@@ -10,24 +11,83 @@ from astroagent.io.metadata import header_metadata
 from astroagent.models.image import AstroImage
 
 
-def load_fits(path: Path | str) -> AstroImage:
+def list_hdus(path: Path | str) -> list[dict[str, Any]]:
+    """List zero-based HDUs using headers only, including unsupported layouts.
+
+    Dimensions follow NumPy axis order. BITPIX describes on-disk precision;
+    BSCALE/BZERO describe scaling applied on load, not a processing dtype.
+    """
+    entries = []
+    try:
+        with fits.open(path, memmap=True, lazy_load_hdus=True) as hdus:
+            for index, item in enumerate(hdus):
+                header = item.header
+                dimensions = [
+                    int(header[f"NAXIS{axis}"])
+                    for axis in range(int(header.get("NAXIS", 0)), 0, -1)
+                ]
+                image = isinstance(item, fits.PrimaryHDU | fits.ImageHDU | fits.CompImageHDU)
+                supported = image and len(dimensions) == 2 and all(dimensions)
+                if image and len(dimensions) == 3 and all(dimensions):
+                    axis = header.get("ASTRCHAX", hdus[0].header.get("ASTRCHAX"))
+                    supported = (
+                        axis in (0, 2) and dimensions[axis] == 3
+                        if axis is not None
+                        else (dimensions[0] == 3) != (dimensions[-1] == 3)
+                    )
+                entries.append(
+                    {
+                        "index": index,
+                        "name": str(item.name),
+                        "version": header.get("EXTVER"),
+                        "type": type(item).__name__,
+                        "dimensions": dimensions,
+                        "bitpix": header.get("BITPIX"),
+                        "storage_dtype": {
+                            8: "uint8",
+                            16: "int16",
+                            32: "int32",
+                            64: "int64",
+                            -32: "float32",
+                            -64: "float64",
+                        }.get(header.get("BITPIX")),
+                        "bscale": header.get("BSCALE", 1),
+                        "bzero": header.get("BZERO", 0),
+                        "supported": supported,
+                        "reason": None
+                        if supported
+                        else "Empty, non-image, or unsupported/ambiguous layout.",
+                    }
+                )
+    except (OSError, ValueError, TypeError) as exc:
+        raise ImageIOError("Cannot list FITS HDUs; check file readability and format.") from exc
+    return entries
+
+
+def load_fits(path: Path | str, *, hdu: int | None = None) -> AstroImage:
     """Read the first image HDU, rejecting ambiguous RGB cubes.
 
     An RGB cube must have exactly one end axis of length three; its two spatial
     dimensions must not also suggest an alternative RGB layout.
     """
     source = Path(path)
+    if hdu is not None and (type(hdu) is not int or hdu < 0):
+        raise ImageIOError("HDU index must be a nonnegative zero-based integer.")
     try:
         with fits.open(source, memmap=False) as hdus:
-            for hdu in hdus:
-                if not isinstance(hdu, fits.PrimaryHDU | fits.ImageHDU | fits.CompImageHDU):
+            if hdu is not None and hdu >= len(hdus):
+                raise ImageIOError("Selected HDU index is outside the FITS file.")
+            for index, item in enumerate(hdus):
+                if hdu is not None and index != hdu:
                     continue
-                if hdu.data is None:
+                if not isinstance(item, fits.PrimaryHDU | fits.ImageHDU | fits.CompImageHDU):
                     continue
-                data = np.array(hdu.data, copy=True)
+                if item.data is None:
+                    continue
+                data = np.array(item.data, copy=True)
                 header = hdus[0].header.copy()
-                if hdu is not hdus[0]:
-                    header.extend(hdu.header, update=True)
+                if item is not hdus[0]:
+                    header.extend(item.header, update=True)
                 if data.ndim == 3:
                     first, last = data.shape[0] == 3, data.shape[-1] == 3
                     declared_axis = header.get("ASTRCHAX")
@@ -52,6 +112,7 @@ def load_fits(path: Path | str) -> AstroImage:
                 if level is None and data.dtype.kind in "ui":
                     level = float(np.iinfo(data.dtype).max)
                 image = AstroImage(data, header_metadata(header), source, header, level)
+                image.input_hdu = index
                 if data.ndim == 3:
                     image.storage_channel_axis = channel_axis
                 return image

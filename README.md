@@ -79,8 +79,8 @@ aia normalize photo.tiff preview.jpg
 aia inspect preview.png --json
 
 aia run examples/pipeline.yaml --input image.fit --output processed.fit
-aia agent image.fit "zpracuj tento snímek přirozeně a nepřepal hvězdy" --dry-run --explain
-aia agent image.fit "zpracuj tento obrázek" --output processed.fit --explain
+aia agent image.fit "process naturally and preserve the stars" --dry-run --explain
+aia agent image.fit "process this image" --output processed.fit --explain
 
 aia tools
 aia -v run examples/pipeline.yaml --input image.fit --output processed.fit
@@ -302,8 +302,8 @@ The guide explicitly requires calibration before debayering and prohibits invent
 CFA patterns. See [src/astroagent/agent/prompts.py](src/astroagent/agent/prompts.py).
 
 ```bash
-aia agent ./session "zpracuj celou session a vytvoř kvalitní master" --output master.fit
-aia agent image.fit "zvýrazni lokální kontrast a jemně doostři" --output preview.jpg --max-iterations 5
+aia agent ./session "process the session and create a quality master" --output master.fit
+aia agent image.fit "enhance local contrast and sharpen gently" --output preview.jpg --max-iterations 5
 aia agent ./session "stack and enhance faint detail, preserve stars" --provider openai --model YOUR_GPT_MODEL --output result.tiff --max-iterations 5
 ```
 
@@ -528,8 +528,8 @@ Independent registry tools also include `build_master_bias`, `build_master_dark`
 
 ```bash
 aia run examples/session-pipeline.yaml --input ./session --output ./work/master.fit
-aia agent ./session "zpracuj celou session a vytvoř kvalitní master" --dry-run --explain
-aia agent ./session "zpracuj celou session" --output ./work/agent-master.fit
+aia agent ./session "process the session and create a quality master" --dry-run --explain
+aia agent ./session "process the session" --output ./work/agent-master.fit
 ```
 
 Dataset planning receives counts, normalized session metadata, prepared-frame quality,
@@ -538,6 +538,18 @@ the existing optional LLM providers can select the same tools using this pixel-f
 payload. Neither planning route executes numerical calibration or registration.
 
 ## Contributing
+
+The installed desktop backend starts with `python -m astroagent.worker`. Its versioned
+UTF-8 JSON Lines interface uses the existing registry, executors and planners with
+bounded jobs, progress, cooperative cancellation and job-owned artifacts. Manual
+processing needs no API keys; planning never executes a proposed pipeline.
+
+See [worker protocol](docs/worker-protocol.md),
+[execution/cancellation and selected FITS HDUs](docs/execution-and-cancellation.md),
+[processing previews and HFR](docs/preview-and-quality.md), and
+[unreleased aiaGUI handoff](docs/release-handoff.md). Preview processing uses the full
+image before cropping/resizing; exported preview PNGs are display artifacts. HFR is
+measured from aperture flux and does not change existing quality-score weights.
 
 See [development.md](development.md) for Poetry setup, test commands, adding tools,
 versioning, and PyPI/GitHub release configuration.

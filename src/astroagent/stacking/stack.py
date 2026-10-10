@@ -1,3 +1,4 @@
+import shutil
 import warnings
 from collections.abc import Iterable
 from pathlib import Path
@@ -9,7 +10,14 @@ from astropy.stats import sigma_clip
 from numpy.typing import NDArray
 from pydantic import Field
 
-from astroagent.errors import PipelineError
+from astroagent.errors import PipelineError, ResourceLimitError
+from astroagent.execution import (
+    ExecutionContext,
+    checkpoint,
+    current_context,
+    emit_progress,
+    execution_scope,
+)
 from astroagent.models.base import SchemaModel
 from astroagent.models.image import AstroImage
 from astroagent.stacking.normalization import normalization_coefficients, normalization_statistics
@@ -85,6 +93,7 @@ def combine_pixels(
         )
 
 
+@execution_scope
 def combine_images(
     images: Iterable[AstroImage],
     count: int,
@@ -93,6 +102,7 @@ def combine_images(
     weights: NDArray[Any] | None = None,
     normalize: bool = False,
     reference_index: int = 0,
+    context: ExecutionContext | None = None,
 ) -> tuple[AstroImage, list[dict[str, list[float]]]]:
     """Spool each input once to disk, then stack row tiles without holding the cube in RAM.
 
@@ -104,16 +114,33 @@ def combine_images(
     template: AstroImage | None = None
     statistics = []
     coefficients: list[dict[str, list[float]]] = []
-    with TemporaryDirectory(prefix="astro-stack-") as directory:
+    active = current_context()
+    scratch = active.scratch_directory if active is not None else None
+    emit_progress("stack-spooling", 0, count, "frame")
+    with TemporaryDirectory(prefix="astro-stack-", dir=scratch) as directory:
         cube = None
         seen = 0
         try:
             for i, image in enumerate(images):
+                checkpoint()
                 if i >= count:
                     raise PipelineError("More frames supplied than the declared count.")
                 if template is None:
                     template = image.with_data(np.empty((1, 1), dtype=np.float32))
                     shape = image.data.shape
+                    disk_bytes = count * int(np.prod(shape)) * 4
+                    if disk_bytes > shutil.disk_usage(directory).free:
+                        raise ResourceLimitError(
+                            "Insufficient scratch disk space for the stack spool."
+                        )
+                    if (
+                        active is not None
+                        and active.scratch_bytes is not None
+                        and disk_bytes > active.scratch_bytes
+                    ):
+                        raise ResourceLimitError(
+                            "Stack spool exceeds the configured scratch byte budget."
+                        )
                     cube = np.lib.format.open_memmap(
                         Path(directory) / "frames.npy",
                         mode="w+",
@@ -129,6 +156,7 @@ def combine_images(
                 if normalize:
                     statistics.append(normalization_statistics(image.data))
                 seen += 1
+                emit_progress("stack-spooling", seen, count, "frame")
             if seen != count or template is None or cube is None:
                 raise PipelineError("Fewer frames supplied than the declared count.")
             channels = 1 if len(shape) == 2 else 3
@@ -144,10 +172,20 @@ def combine_images(
                 1,
                 min(
                     params.tile_rows,
-                    params.memory_mb * 1024**2 // (count * shape[1] * channels * 32),
+                    min(
+                        params.memory_mb,
+                        active.memory_mb
+                        if active is not None and active.memory_mb is not None
+                        else params.memory_mb,
+                    )
+                    * 1024**2
+                    // (count * shape[1] * channels * 32),
                 ),
             )
-            for y in range(0, shape[0], rows):
+            tile_count = (shape[0] + rows - 1) // rows
+            emit_progress("stack-combining", 0, tile_count, "tile")
+            for tile_index, y in enumerate(range(0, shape[0], rows), 1):
+                checkpoint()
                 tile = np.array(cube[:, y : y + rows], copy=True)
                 if normalize:
                     tile_scale = np.array([c["scale"] for c in coefficients], dtype=np.float32)
@@ -156,6 +194,7 @@ def combine_images(
                     tile *= tile_scale.reshape(dims)
                     tile += tile_offset.reshape(dims)
                 output[y : y + rows] = combine_pixels(tile, params, weights)
+                emit_progress("stack-combining", tile_index, tile_count, "tile")
             return template.with_data(output), coefficients
         finally:
             if cube is not None:

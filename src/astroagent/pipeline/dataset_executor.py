@@ -7,6 +7,7 @@ from typing import Any
 
 from astroagent import __version__
 from astroagent.errors import PipelineError
+from astroagent.execution import ExecutionContext, checkpoint, emit_progress, execution_scope
 from astroagent.io.datasets import discover_fits, write_json
 from astroagent.io.export import export_image
 from astroagent.io.images import image_format
@@ -28,6 +29,7 @@ class DatasetPipelineResult:
     report: dict[str, Any]
 
 
+@execution_scope
 def execute_dataset_pipeline(
     dataset: AstroDataset,
     pipeline: PipelineDefinition,
@@ -35,6 +37,7 @@ def execute_dataset_pipeline(
     output: Path,
     *,
     overwrite: bool = False,
+    context: ExecutionContext | None = None,
 ) -> DatasetPipelineResult:
     """Execute typed dataset/image transitions using a disk-backed artifact workspace."""
     image_output = any(
@@ -93,7 +96,9 @@ def execute_dataset_pipeline(
         "warnings": [],
     }
     current: AstroDataset | AstroImage = dataset
+    emit_progress("pipeline", 0, len(resolved), "step")
     for index, (tool, params) in enumerate(resolved, 1):
+        checkpoint()
         logger.info("Step %d: %s", index, tool.name)
         tick = perf_counter()
         destination = work / f"{index:02d}-{tool.name}"
@@ -116,6 +121,8 @@ def execute_dataset_pipeline(
                 "report": diagnostics,
             }
         )
+        emit_progress("pipeline", index, len(resolved), "step", step_index=index)
+    emit_progress("saving")
     if isinstance(current, AstroImage):
         output.parent.mkdir(parents=True, exist_ok=True)
         report["export"] = export_image(current, output, overwrite=overwrite)

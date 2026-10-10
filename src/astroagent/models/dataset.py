@@ -31,6 +31,7 @@ class AstroDataset:
     registrations: list[RegistrationResult] = field(default_factory=list)
     masters: list[MasterFrame] = field(default_factory=list)
     reports: dict[str, Any] = field(default_factory=dict)
+    purpose_overrides: dict[str, str] = field(default_factory=dict)
 
 
 class DatasetMetrics(SchemaModel):

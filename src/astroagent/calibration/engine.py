@@ -7,6 +7,7 @@ from astroagent.calibration.defects import correct_defects, detect_hot_pixels
 from astroagent.calibration.models import CalibrationPlan, FrameInfo
 from astroagent.calibration.session import compatible, normalize_metadata
 from astroagent.errors import PipelineError
+from astroagent.execution import ExecutionContext, checkpoint, emit_progress, execution_scope
 from astroagent.io.metadata import header_metadata
 from astroagent.models.image import AstroImage
 from astroagent.models.layout import CFAMetadata
@@ -26,6 +27,7 @@ def _info(image: AstroImage) -> FrameInfo:
     return normalize_metadata(header, image.path or Path("memory.fit"))
 
 
+@execution_scope
 def calibrate_image(
     image: AstroImage,
     plan: CalibrationPlan,
@@ -33,6 +35,7 @@ def calibrate_image(
     bias: AstroImage | None = None,
     dark: AstroImage | None = None,
     flat: AstroImage | None = None,
+    context: ExecutionContext | None = None,
 ) -> tuple[AstroImage, list[str], dict[str, Any]]:
     """Apply bias/dark subtraction and CFA-aware flat division in floating point.
 
@@ -71,6 +74,7 @@ def calibrate_image(
         for key in ("gain", "offset"):
             if getattr(info, key) is None or getattr(_info(master), key) is None:
                 messages.append(f"Cannot verify master {name} {key}: missing metadata.")
+    emit_progress("calibration-kernel")
     data = np.array(image.data, dtype=np.float32, copy=True)
     history: list[str] = []
     scale = 1.0
@@ -141,6 +145,7 @@ def calibrate_image(
             raise PipelineError("Cosmetic correction requires a master dark.")
         result = correct_defects(result, detect_hot_pixels(dark, sigma=plan.hot_pixel_sigma))
         data = result.data
+    checkpoint()
     if flat is not None:
         response = np.asarray(flat.data, dtype=np.float32)
         median = np.nanmedian(response, axis=(0, 1))

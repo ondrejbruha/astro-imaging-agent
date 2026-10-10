@@ -6,7 +6,9 @@ from photutils.detection import DAOStarFinder
 from pydantic import Field
 
 from astroagent.analysis.background import estimate_surface, luminance
+from astroagent.analysis.hfr import HFRParams, measure_hfr
 from astroagent.errors import AnalysisError
+from astroagent.execution import ExecutionContext, checkpoint, execution_scope
 from astroagent.models.base import SchemaModel
 from astroagent.models.image import AstroImage
 
@@ -20,6 +22,8 @@ class DetectedStar(SchemaModel):
     peak: float | None = None
     fwhm: float | None = Field(default=None, gt=0)
     eccentricity: float | None = Field(default=None, ge=0, le=1)
+    hfr: float | None = Field(default=None, gt=0)
+    hfr_warning: str | None = None
 
 
 class StarCatalog(SchemaModel):
@@ -37,9 +41,16 @@ class DetectionParams(SchemaModel):
     threshold_sigma: float = Field(default=5, gt=0)
     fwhm: float = Field(default=3, gt=0)
     max_stars: int = Field(default=2000, ge=3, le=100000)
+    hfr: HFRParams = Field(default_factory=HFRParams)
 
 
-def detect_stars(image: AstroImage, params: DetectionParams | None = None) -> StarCatalog:
+@execution_scope
+def detect_stars(
+    image: AstroImage,
+    params: DetectionParams | None = None,
+    *,
+    context: ExecutionContext | None = None,
+) -> StarCatalog:
     """Use DAOStarFinder above a fitted sky and measure local second moments.
 
     NaNs are masked. Saturated stars and border cutouts are excluded. Moments
@@ -78,6 +89,7 @@ def detect_stars(image: AstroImage, params: DetectionParams | None = None) -> St
     ycol = "y_centroid" if "y_centroid" in sources.colnames else "ycentroid"
     radius = max(3, int(np.ceil(1.5 * params.fwhm)))
     for row in sources:
+        checkpoint()
         cx, cy = float(row[xcol]), float(row[ycol])
         x, y = int(round(cx)), int(round(cy))
         if min(x, y) < radius or x + radius >= data.shape[1] or y + radius >= data.shape[0]:
@@ -119,4 +131,5 @@ def detect_stars(image: AstroImage, params: DetectionParams | None = None) -> St
         )
     catalog.stars.sort(key=lambda s: (-s.flux, s.x, s.y))
     catalog.stars = catalog.stars[: params.max_stars]
+    measure_hfr(image, catalog, params.hfr)
     return catalog

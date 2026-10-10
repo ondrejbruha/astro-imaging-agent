@@ -17,6 +17,7 @@ from astroagent.calibration.models import (
 )
 from astroagent.calibration.session import compatible, group_frames, inspect_frame
 from astroagent.errors import AstroError, PipelineError
+from astroagent.execution import ExecutionContext, checkpoint, emit_progress, execution_scope
 from astroagent.io.datasets import frame_name, prepare_directory, write_json
 from astroagent.io.fits import load_fits, save_fits
 from astroagent.models.image import AstroImage
@@ -82,6 +83,7 @@ def choose_master(
     return min(candidates, key=distance)
 
 
+@execution_scope
 def build_master(
     frames: list[FrameInfo],
     kind: FrameType,
@@ -91,6 +93,7 @@ def build_master(
     bias: AstroImage | None = None,
     dark: AstroImage | None = None,
     overwrite: bool = False,
+    context: ExecutionContext | None = None,
 ) -> MasterFrame:
     """Combine compatible calibration frames with conservative frame and pixel rejection.
 
@@ -118,11 +121,14 @@ def build_master(
     measurements: list[dict[str, Any]] = []
     rejected: dict[str, list[str]] = {}
     # Header-only discovery and a quality pass keep memory independent of N.
-    for info in frames:
+    emit_progress("master-analysis", 0, len(frames), "frame")
+    for index, info in enumerate(frames, 1):
+        checkpoint()
         try:
             stats = inspect_image(load_fits(info.path))
         except (AstroError, OSError, ValueError) as exc:
             rejected[str(info.path)] = [f"frame quality unavailable: {exc}"]
+            emit_progress("master-analysis", index, len(frames), "frame")
             continue
         measurements.append(
             {
@@ -136,6 +142,7 @@ def build_master(
                 "dynamic_range": stats.percentile_99 - stats.percentile_1,
             }
         )
+        emit_progress("master-analysis", index, len(frames), "frame")
     messages: list[str] = []
     for m in measurements:
         if kind == FrameType.FLAT:
@@ -162,6 +169,7 @@ def build_master(
 
     def corrected() -> Iterator[AstroImage]:
         for info in used:
+            checkpoint()
             image = load_fits(info.path)
             if info.cfa is not None:
                 image.header["BAYERPAT"] = info.cfa.pattern
@@ -185,6 +193,7 @@ def build_master(
         master.header["DCBIAS"] = bias is None
     master.header.add_history(f"Master {kind.value}: {len(used)} frames, {params.method}")
     output.parent.mkdir(parents=True, exist_ok=True)
+    checkpoint()
     save_fits(master, output, overwrite=overwrite)
     result = MasterFrame(
         path=output,
@@ -209,12 +218,14 @@ def build_master(
     return result
 
 
+@execution_scope
 def build_masters(
     session: AstroSession,
     output: Path,
     *,
     params: CombineParams | None = None,
     overwrite: bool = False,
+    context: ExecutionContext | None = None,
     initial_masters: list[MasterFrame] | None = None,
 ) -> list[MasterFrame]:
     """Build separate sensor, exposure/temperature and filter groups in dependency order."""
@@ -222,6 +233,8 @@ def build_masters(
     results: list[MasterFrame] = list(initial_masters or [])
     for kind in (FrameType.BIAS, FrameType.DARK, FrameType.DARK_FLAT, FrameType.FLAT):
         for index, group in enumerate(group_frames(session.of_type(kind), kind), 1):
+            checkpoint()
+            emit_progress("building-masters")
             info = group[0]
             bias = choose_master(info, results, FrameType.BIAS)
             dark = None

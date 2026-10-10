@@ -23,6 +23,7 @@ class AstroImage:
     header: Header = field(default_factory=Header)
     saturation_level: float | None = None
     storage_channel_axis: int = 0
+    input_hdu: int | None = None
 
     def __post_init__(self) -> None:
         """Validate shape and real numeric data without copying large arrays."""
@@ -68,4 +69,5 @@ class AstroImage:
             header=self.header.copy(),
             saturation_level=self.saturation_level,
             storage_channel_axis=self.storage_channel_axis,
+            input_hdu=self.input_hdu,
         )

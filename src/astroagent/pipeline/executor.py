@@ -4,14 +4,15 @@ from dataclasses import dataclass
 from importlib.metadata import version
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 from pydantic import ValidationError
 
 from astroagent import __version__
 from astroagent.analysis.statistics import inspect_image
-from astroagent.errors import AstroError, PipelineError
+from astroagent.errors import AstroError, PipelineError, PipelineValidationError
+from astroagent.execution import ExecutionContext, checkpoint, emit_progress, execution_scope
 from astroagent.io.images import image_format, load_image, save_image
 from astroagent.models.image import AstroImage
 from astroagent.pipeline.dataset_executor import (
@@ -56,7 +57,7 @@ class PipelineExecutor:
         self.registry = default_registry() if registry is None else registry
 
     def validate(
-        self, pipeline: PipelineDefinition
+        self, pipeline: PipelineDefinition, *, input_kind: Literal["image", "dataset"] | None = None
     ) -> list[tuple[ImageTool[Any] | DatasetTool[Any], Any]]:
         """Resolve every step before modifying data; identify failures by step number."""
         resolved = []
@@ -65,16 +66,47 @@ class PipelineExecutor:
                 tool = self.registry.get(step.tool)
                 params = tool.params_model.model_validate(step.params)
                 resolved.append((tool, params))
-            except (PipelineError, ValidationError) as exc:
-                raise PipelineError(f"Step {index} ({step.tool}): {exc}") from exc
+            except ValidationError as exc:
+                raise PipelineValidationError(
+                    f"Step {index} ({step.tool}): {exc}",
+                    [
+                        {"step_index": index, "field": list(error["loc"]), "type": error["type"]}
+                        for error in exc.errors(include_input=False, include_context=False)
+                    ],
+                ) from exc
+            except PipelineError as exc:
+                raise PipelineValidationError(
+                    f"Step {index} ({step.tool}): {exc}",
+                    [{"step_index": index, "field": ["tool"], "type": "unknown_tool"}],
+                ) from exc
+        if input_kind is not None:
+            state = input_kind
+            for index, (tool, _) in enumerate(resolved, 1):
+                required = "dataset" if isinstance(tool, DatasetTool) else "image"
+                if state != required:
+                    raise PipelineValidationError(
+                        f"Step {index} ({tool.name}) requires {required} input; received {state}.",
+                        [{"step_index": index, "field": [], "type": "input_transition"}],
+                    )
+                if isinstance(tool, DatasetTool):
+                    state = tool.output_kind
         return resolved
 
-    def execute(self, image: AstroImage, pipeline: PipelineDefinition) -> PipelineResult:
+    @execution_scope
+    def execute(
+        self,
+        image: AstroImage,
+        pipeline: PipelineDefinition,
+        *,
+        context: ExecutionContext | None = None,
+    ) -> PipelineResult:
         """Execute deterministic tools and record resolved parameters and diagnostics."""
+        emit_progress("validating")
         resolved = self.validate(pipeline)
         if any(isinstance(tool, DatasetTool) for tool, _ in resolved):
             raise PipelineError("Dataset tools require directory input, not a single AstroImage.")
         report = ProcessingReport(
+            input_hdu=image.input_hdu,
             input=None if image.path is None else str(image.path),
             package_version=__version__,
             dependency_versions={
@@ -92,7 +124,9 @@ class PipelineExecutor:
             metrics_after=inspect_image(image),
         )
         current = image
+        emit_progress("pipeline", 0, len(resolved), "step")
         for index, (tool, params) in enumerate(resolved, start=1):
+            checkpoint()
             assert isinstance(tool, ImageTool)
             logger.info("Step %d: %s", index, tool.name)
             started = perf_counter()
@@ -112,10 +146,12 @@ class PipelineExecutor:
             )
             report.warnings.extend(result.warnings)
             current = result.image
+            emit_progress("pipeline", index, len(resolved), "step", step_index=index)
         report.metrics_after = inspect_image(current)
         report.output_sha256 = image_digest(current)
         return PipelineResult(current, report)
 
+    @execution_scope
     def run(
         self,
         pipeline: PipelineDefinition,
@@ -123,10 +159,16 @@ class PipelineExecutor:
         output_path: Path | str,
         *,
         overwrite: bool = False,
+        hdu: int | None = None,
+        context: ExecutionContext | None = None,
     ) -> PipelineResult | DatasetPipelineResult:
         """Load an image, execute, and save it with resolved YAML and a JSON sidecar."""
         resolved = self.validate(pipeline)
         if Path(input_path).is_dir():
+            if hdu is not None:
+                raise PipelineError(
+                    "HDU selection applies to one FITS image, not a directory dataset."
+                )
             return execute_dataset_pipeline(
                 load_dataset(Path(input_path), recursive=True),
                 pipeline,
@@ -135,7 +177,9 @@ class PipelineExecutor:
                 overwrite=overwrite,
             )
         check_output_paths(Path(input_path), Path(output_path), overwrite=overwrite)
-        result = self.execute(load_image(input_path), pipeline)
+        emit_progress("loading")
+        result = self.execute(load_image(input_path, hdu=hdu), pipeline)
+        emit_progress("saving")
         save_result(result, output_path, overwrite=overwrite)
         return result
 
@@ -152,7 +196,11 @@ def check_output_paths(input_path: Path | None, output_path: Path, *, overwrite:
     image_format(output_path)
     if len({path.resolve() for path in paths}) != 3:
         raise PipelineError("Image output must have a supported filename, distinct from sidecars.")
-    if input_path is not None and input_path.resolve() in {path.resolve() for path in paths}:
+    if input_path is not None and any(
+        input_path.resolve() == path.resolve()
+        or (input_path.exists() and path.exists() and input_path.samefile(path))
+        for path in paths
+    ):
         raise PipelineError("Output artifacts must not replace the input image.")
     if not output_path.parent.is_dir():
         raise PipelineError(f"Output directory does not exist: {output_path.parent}")

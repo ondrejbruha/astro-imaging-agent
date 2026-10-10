@@ -1,5 +1,6 @@
 """Install the built wheel into an isolated environment and exercise its CLI."""
 
+import argparse
 import json
 import os
 import subprocess
@@ -7,10 +8,18 @@ import tempfile
 import venv
 from pathlib import Path
 
+from worker_smoke import smoke_worker
+
 
 def main() -> None:
     """Verify the entry point outside the checkout using declared runtime dependencies."""
-    wheel = next(Path("dist").glob("*.whl")).resolve()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--dist", type=Path, default=Path("dist"))
+    args = parser.parse_args()
+    wheels = list(args.dist.glob("*.whl"))
+    if len(wheels) != 1:
+        raise SystemExit("Expected exactly one built wheel in the selected distribution directory.")
+    wheel = wheels[0].resolve()
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         venv.create(root / "env", with_pip=True)
@@ -58,6 +67,7 @@ fits.writeto('input.fit', data, header=fits.Header({'OBJECT': 'Package smoke'}))
         first = json.loads((root / "out.processing.json").read_text())
         replay = json.loads((root / "replay.processing.json").read_text())
         assert first["output_sha256"] == replay["output_sha256"]
+        smoke_worker(python, root)
         source = next(wheel.parent.glob("*.tar.gz"))
         subprocess.run(
             [str(python), "-m", "pip", "install", "--force-reinstall", "--no-deps", str(source)],

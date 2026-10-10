@@ -35,6 +35,13 @@ class FrameInfo(SchemaModel):
     binning: tuple[int, int] = (1, 1)
     bitpix: int
     master: bool = False
+    input_hdu: int | None = Field(default=None, ge=0)
+    purpose_source: str = "header-or-path"
+    capture_time: str | None = None
+    camera: str | None = None
+    telescope: str | None = None
+    pixel_scale_arcsec: tuple[float, float] | None = None
+    metadata_sources: dict[str, str] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
 
 

@@ -8,6 +8,7 @@ from pydantic import Field
 
 from astroagent.analysis.frame_quality import FrameQualityMetrics
 from astroagent.errors import PipelineError
+from astroagent.execution import ExecutionContext, execution_scope
 from astroagent.io.datasets import write_json
 from astroagent.io.export import export_image
 from astroagent.io.fits import load_fits
@@ -50,9 +51,12 @@ def restore_registration(dataset: AstroDataset) -> None:
     dataset.reports["registration"] = document
 
 
+@execution_scope
 def stack_frames(
     dataset: AstroDataset,
     params: StackParams | None = None,
+    *,
+    context: ExecutionContext | None = None,
 ) -> tuple[AstroImage, dict[str, Any]]:
     """Reject frame outliers and combine aligned mono/RGB data with complete provenance."""
     params = StackParams() if params is None else params

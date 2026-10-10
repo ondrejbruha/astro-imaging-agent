@@ -44,6 +44,7 @@ class ProcessingReport(SchemaModel):
 
     version: Literal[1] = 1
     input: str | None
+    input_hdu: int | None = Field(default=None, ge=0)
     output: str | None = None
     package_version: str
     dependency_versions: dict[str, str]

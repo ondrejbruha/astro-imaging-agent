@@ -4,11 +4,15 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 from astropy.io import fits
 from astropy.io.fits import Header
+from astropy.wcs import WCS
+from astropy.wcs.utils import proj_plane_pixel_scales
 
 from astroagent.calibration.models import AstroSession, FrameInfo, FrameType
 from astroagent.errors import PipelineError
+from astroagent.execution import ExecutionContext, checkpoint, emit_progress, execution_scope
 from astroagent.io.datasets import discover_fits
 from astroagent.models.layout import CFAMetadata, ImageLayout
 
@@ -97,6 +101,27 @@ def normalize_metadata(header: Header, path: Path, *, cfa_pattern: str | None = 
         elif str(header.get("COLORTYP", "")).casefold() in {"osc", "cfa", "bayer"}:
             raise PipelineError(f"CFA pattern is required for {path}; use --cfa-pattern.")
     filter_name = header.get("FILTER", header.get("FILTERID"))
+    sources = {}
+    capture_time = header.get("DATE-OBS")
+    camera = header.get("INSTRUME", header.get("CAMERA"))
+    telescope = header.get("TELESCOP")
+    for key, value, card in (
+        ("capture_time", capture_time, "DATE-OBS"),
+        ("camera", camera, "INSTRUME/CAMERA"),
+        ("telescope", telescope, "TELESCOP"),
+    ):
+        if value is not None:
+            sources[key] = card
+    pixel_scale = None
+    try:
+        wcs = WCS(header, naxis=2)
+        if wcs.has_celestial:
+            scales = np.asarray(proj_plane_pixel_scales(wcs.celestial), dtype=float) * 3600
+            if np.isfinite(scales).all() and (scales > 0).all():
+                pixel_scale = (float(scales[0]), float(scales[1]))
+                sources["pixel_scale_arcsec"] = "celestial WCS projected plane"
+    except (ValueError, TypeError):
+        pass
     return FrameInfo(
         path=path,
         frame_type=classify_frame(header, path),
@@ -115,20 +140,40 @@ def normalize_metadata(header: Header, path: Path, *, cfa_pattern: str | None = 
         ),
         bitpix=int(header["BITPIX"]),
         master="MASTER" in header,
+        capture_time=None if capture_time is None else str(capture_time),
+        camera=None if camera is None else str(camera),
+        telescope=None if telescope is None else str(telescope),
+        pixel_scale_arcsec=pixel_scale,
+        metadata_sources=sources,
     )
 
 
-def inspect_frame(path: Path, *, cfa_pattern: str | None = None) -> FrameInfo:
+def inspect_frame(
+    path: Path,
+    *,
+    cfa_pattern: str | None = None,
+    frame_type: FrameType | None = None,
+    hdu: int | None = None,
+) -> FrameInfo:
     """Inspect the first image HDU header without reading full pixel arrays."""
     with fits.open(path, memmap=True) as hdus:
-        for hdu in hdus:
+        if hdu is not None and (type(hdu) is not int or hdu < 0 or hdu >= len(hdus)):
+            raise PipelineError("Selected HDU index is outside the FITS file.")
+        for index, item in enumerate(hdus):
+            if hdu is not None and index != hdu:
+                continue
             if (
-                isinstance(hdu, fits.PrimaryHDU | fits.ImageHDU | fits.CompImageHDU)
-                and hdu.header.get("NAXIS", 0) >= 2
+                isinstance(item, fits.PrimaryHDU | fits.ImageHDU | fits.CompImageHDU)
+                and item.header.get("NAXIS", 0) >= 2
             ):
                 header = hdus[0].header.copy()
-                header.extend(hdu.header, update=True)
-                return normalize_metadata(header, path, cfa_pattern=cfa_pattern)
+                header.extend(item.header, update=True)
+                info = normalize_metadata(header, path, cfa_pattern=cfa_pattern)
+                if frame_type is not None:
+                    info.frame_type = FrameType(frame_type)
+                    info.purpose_source = "explicit-override"
+                info.input_hdu = index
+                return info
     raise PipelineError(f"No image HDU in {path}.")
 
 
@@ -137,21 +182,37 @@ def discover_session(source: Path | str, *, cfa_pattern: str | None = None) -> A
     return inspect_session_frames(discover_fits(source, recursive=True), cfa_pattern=cfa_pattern)
 
 
-def inspect_session_frames(paths: list[Path], *, cfa_pattern: str | None = None) -> AstroSession:
+@execution_scope
+def inspect_session_frames(
+    paths: list[Path],
+    *,
+    cfa_pattern: str | None = None,
+    purposes: dict[str, str] | None = None,
+    context: ExecutionContext | None = None,
+) -> AstroSession:
     """Inspect explicit dataset paths, warning on invalid files and refusing CFA ambiguity."""
     session = AstroSession(frames=[])
-    for path in paths:
+    emit_progress("session-inspection", 0, len(paths), "frame")
+    for index, path in enumerate(paths, 1):
+        checkpoint()
         try:
-            info = inspect_frame(path, cfa_pattern=cfa_pattern)
+            purpose = (purposes or {}).get(str(path))
+            info = inspect_frame(
+                path,
+                cfa_pattern=cfa_pattern,
+                frame_type=None if purpose is None else FrameType(purpose),
+            )
         except (OSError, ValueError, PipelineError) as exc:
             # Unknown CFA is a required user choice, not a reason to silently skip a light.
             if "CFA" in str(exc):
                 raise PipelineError(str(exc)) from exc
             session.warnings.append(f"Cannot inspect {path}: {exc}")
+            emit_progress("session-inspection", index, len(paths), "frame")
             continue
         session.frames.append(info)
         if info.frame_type == FrameType.UNKNOWN:
             session.warnings.append(f"Unknown frame type: {path}.")
+        emit_progress("session-inspection", index, len(paths), "frame")
     return session
 
 

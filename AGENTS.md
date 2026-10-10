@@ -10,3 +10,7 @@
 - Processing must be deterministic and must preserve relevant FITS metadata.
 - Document public APIs and behavior, including numerical limitations.
 - Do not add GPU processing, external LLM integrations, or unrelated dependencies without a task requiring them.
+- For aiaGUI backend assignments, Git operations are read-only: do not stage, commit, push, merge, rebase, reset, or tag unless the user changes that task instruction.
+- Worker stdout is reserved for finite protocol JSON; never echo credentials or raw provider errors.
+- Keep processing YAML version 1 independent of GUI metadata and selected input references.
+- Test worker cancellation, artifact finalization, explicit frame/HDU selection, and installed-wheel startup when changing backend contracts.

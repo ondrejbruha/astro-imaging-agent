@@ -8,6 +8,7 @@ from pydantic import Field, model_validator
 
 from astroagent.analysis.frame_quality import FrameQualityMetrics, measure_frame, score_frames
 from astroagent.errors import AstroError, PipelineError
+from astroagent.execution import ExecutionContext, checkpoint, emit_progress, execution_scope
 from astroagent.io.datasets import frame_name, prepare_directory, write_json
 from astroagent.io.fits import load_fits, save_fits
 from astroagent.io.wcs import copy_reference_wcs
@@ -69,20 +70,32 @@ class RegistrationResult(SchemaModel):
     timings_ms: dict[str, float] = Field(default_factory=dict)
 
 
-def analyze_frames(dataset: AstroDataset, detection: DetectionParams | None = None) -> AstroDataset:
+@execution_scope
+def analyze_frames(
+    dataset: AstroDataset,
+    detection: DetectionParams | None = None,
+    *,
+    context: ExecutionContext | None = None,
+) -> AstroDataset:
     """Analyze one disk frame at a time; record unreadable frames without aborting the dataset."""
     started = perf_counter()
     metrics: list[FrameQualityMetrics] = []
     failures = []
-    for path in dataset.frames:
+    emit_progress("analyzing", 0, len(dataset.frames), "frame")
+    emit_progress("registering", 0, len(dataset.frames), "frame")
+    for index, path in enumerate(dataset.frames, 1):
+        checkpoint()
+        checkpoint()
         try:
             frame, catalog = measure_frame(load_fits(path), path=path, detection=detection)
         except (AstroError, OSError, ValueError) as exc:
             failures.append({"path": str(path), "warning": str(exc)})
             logger.warning("Cannot analyze %s: %s", path, exc)
+            emit_progress("analyzing", index, len(dataset.frames), "frame")
             continue
         dataset.catalogs[str(path)] = catalog
         metrics.append(frame)
+        emit_progress("analyzing", index, len(dataset.frames), "frame")
     if not metrics:
         raise PipelineError(
             "No usable frames could be analyzed. Debayer raw CFA before registration."
@@ -97,6 +110,7 @@ def analyze_frames(dataset: AstroDataset, detection: DetectionParams | None = No
     return dataset
 
 
+@execution_scope
 def register_frames(
     dataset: AstroDataset,
     output: Path,
@@ -104,6 +118,7 @@ def register_frames(
     *,
     overwrite: bool = False,
     progress: Callable[[], None] | None = None,
+    context: ExecutionContext | None = None,
 ) -> AstroDataset:
     """Select reference, match triangles, robustly fit and resample to reference coverage."""
     params = RegistrationParams() if params is None else params
@@ -111,6 +126,8 @@ def register_frames(
     started = perf_counter()
     if not dataset.catalogs or not dataset.qualities:
         analyze_frames(dataset, params.detection)
+    if dataset.reference is not None and params.reference == "auto":
+        params = params.model_copy(update={"reference": str(dataset.reference)})
     if params.reference == "auto":
         reference = Path(select_reference(dataset.qualities, min_stars=params.min_matches).path)
     else:
@@ -136,7 +153,9 @@ def register_frames(
         reports=dict(dataset.reports),
     )
     metrics = {m.path: m for m in dataset.qualities}
+    emit_progress("registering", 0, len(dataset.frames), "frame")
     for index, path in enumerate(dataset.frames, 1):
+        checkpoint()
         tick = perf_counter()
         item = RegistrationResult(path=str(path), success=False)
         try:
@@ -214,6 +233,7 @@ def register_frames(
                 f"Registered to {reference.name}; "
                 f"{params.model}/{params.interpolation}; RMS {transform.residual_rms:.6g}"
             )
+            checkpoint()
             target = output / frame_name(path, index)
             save_fits(image, target, overwrite=overwrite)
             item.success, item.output = True, str(target)
@@ -225,6 +245,7 @@ def register_frames(
             logger.warning("Frame %s could not be registered and was excluded: %s", path.name, exc)
         item.duration_ms = (perf_counter() - tick) * 1000
         result.registrations.append(item)
+        emit_progress("registering", index, len(dataset.frames), "frame")
         if progress is not None:
             progress()
     report = {

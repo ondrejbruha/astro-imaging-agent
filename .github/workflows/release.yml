@@ -41,7 +41,8 @@ jobs:
       - run: poetry run python scripts/check_dist.py
         env:
           RELEASE_TAG: ${{ github.ref_name }}
-      - run: poetry run python scripts/smoke_dist.py
+      - name: Installed wheel CLI and worker smoke before publication
+        run: poetry run python scripts/smoke_dist.py
       - uses: actions/upload-artifact@v4
         with:
           name: dist

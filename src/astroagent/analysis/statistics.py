@@ -22,6 +22,7 @@ class StarMetrics(SchemaModel):
 
     star_count: int | None = Field(default=None, ge=0)
     median_fwhm: float | None = Field(default=None, ge=0)
+    median_hfr: float | None = Field(default=None, gt=0)
     median_ellipticity: float | None = Field(default=None, ge=0, le=1)
     median_eccentricity: float | None = Field(default=None, ge=0, le=1)
     warnings: list[str] = Field(default_factory=list)
